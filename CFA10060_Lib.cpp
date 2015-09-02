@@ -1,19 +1,63 @@
-#include "CFA10060Lib.h"
+/*********************************************************
+Crystalfontz CFA10060 Arduino interface library.
 
-#include <avr/pgmspace.h>
-#include <HardwareSerial.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <WString.h>
-#include <SPI.h>
+Crystalfontz: http://www.crystalfontz.com
+Library Source: https://github.com/crystalfontz/CFA-10060_Arduino_Library
+
+Distributed under the "Unlicense" software license.
+See: http://unlicense.org/
+**********************************************************/
+
+#include "CFA10060_Lib.h"
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+//See CFA10060_Lib.h for library settings.
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-//See CFA10060Lib.h for library settings.
+//CFA10060 Commands
+//System
+#define CMD_PING									(0)
+#define CMD_GET_VERSION								(1)
+#define	CMD_SET_I2C_ADDRESS							(2)
+#define	CMD_CHECK_AND_CLEAR_FILESYSTEM_ERRORS		(3)
+//uSD card operations
+#define CMD_GET_SD_CARD_VOLUME_LABEL				(4)
+#define CMD_GET_SD_CARD_FREE_USED_SECTORS			(5)
+#define CMD_GET_NUMBER_OF_FILES_IN_ROOT_DIR			(6)
+#define CMD_GET_NAME_AND_SIZE_OF_FILE				(7)
+#define CMD_FILE_OPEN								(8)
+#define CMD_FILE_READ								(9)
+#define CMD_FILE_WRITE						  		(10)
+#define CMD_FILE_SEEK								(11)
+#define CMD_FILE_TELL								(12)
+#define CMD_FILE_CLOSE								(13)
+#define CMD_FILE_DELETE								(14)
+//LCD operations
+#define CMD_GET_SET_BACKLIGHT_BRIGHTNESS			(15)
+#define CMD_FILL_SCREEN_WITH_SOLID_COLOR			(16)
+#define CMD_LCD_SET_COLOR							(17)
+#define CMD_LCD_PIXEL								(18)
+#define CMD_LCD_LINE								(19)
+#define CMD_LCD_RECTANGLE							(20)
+#define CMD_LCD_ROUNDED_RECTANGLE					(21)
+#define CMD_LCD_CIRCLE								(22)
+#define CMD_LCD_BITBLT								(23)
+#define CMD_LCD_TEXT								(24)
+#define CMD_LCD_CURSOR								(25)
+#define CMD_LCD_SPRITE								(26)
+//LCD <=> uSD card operations
+#define CMD_SAVE_LCD_AS_BMP							(27)
+#define CMD_PUSH_BMP_FROM_SD_CARD_TO_LCD			(28)
+#define CMD_PUSH_MOVIE_FROM_SD_CARD_TO_LCD			(29)
+#define CMD_PUSH_MOVIE_FRAME_FROM_SD_CARD_TO_LCD	(30)
+#define CMD_PUSH_SPRITE_FROM_SD_CARD_TO_LCD			(31)
+#define NUMBER_OF_COMMANDS							(32)
 
-///////////////////////////////////////////////////////////////////////////////////////////////////
+//Packet flags
+#define CMD_NAK_RESPONSE_FLAG						(0x80)
+#define CMD_ERR_RESPONSE_FLAG						(0x40)
 
 #ifdef CFA10006_ERROR_MESSAGES
 const char err_Str_000[] PROGMEM = "NO_ERROR";
@@ -206,6 +250,13 @@ const char *Error_Strings[] = {
 };
 #endif //CFA10006_ERROR_MESSAGES
 
+//Macros for serial messages
+#ifdef CFA10006_SERIAL_MESSAGES
+# define SPRINTF(...) serPrintFF(__VA_ARGS__)
+#else
+# define SPRINTF(...)
+#endif
+
 #ifdef CFA10060_USE_I2C
 # define SENDANDGETRESPONSE I2CSendCommandGetResponse
 # define SENDANDCHECKREPLY(r) \
@@ -295,7 +346,7 @@ uint8_t CFA10060::init(void)
 
 #ifdef CFA10060_USE_SPI
 	//set the SPI bus rate
-	SPI.setClockDivider(SPI_CLOCK_DIV16);
+	SPI.setClockDivider(SPI_CLOCK_DIV32); // SPI_CLOCK_DIV32 = 1MHz SPI
 	//put the SS pin into the correct mode
 	pinMode(CFA10060_SPI_SS_PIN, INPUT_PULLUP);
 	//clear out SPI
@@ -310,8 +361,11 @@ uint8_t CFA10060::init(void)
 
 uint8_t CFA10060::cmdPing(char data[])
 {
-	//Ping
-	//Returns 1 if the CFA10060 replied with the same data that it was sent
+	/*
+	cmdPing sends data to the CFA10060, waits for a reply
+	and then checks the returned ping data against the sent data.
+	If the data matches, the function returns true (1).
+	*/
 	uint8_t		ret, i;
 	//create the command packet
 	I2C_CHECK_ADDR();
@@ -344,7 +398,12 @@ uint8_t CFA10060::cmdPing(char data[])
 
 uint8_t CFA10060::cmdGetVersion(char retVersion[])
 {
-	//Get FW version string (18 chars max length)
+	/*
+	cmdGetVersion requests hardware and firmware version information
+	from the CFA10060. It is returned in retVersion (max
+	length of 18 chars)
+	The returned value is true (1) if successful.
+	*/
 	uint8_t		ret;
 	//create the command packet
 	I2C_CHECK_ADDR();
@@ -361,7 +420,11 @@ uint8_t CFA10060::cmdGetVersion(char retVersion[])
 #ifdef CFA10060_USE_I2C
 uint8_t CFA10060::cmdChangeI2CAddress(uint8_t newAddress)
 {
-	//Change I2C address location
+	/*
+	cmdChangeI2CAddress requests the CFA10060 change its I2C address
+	to the specified newAddress. The new address is saved in EEPROM.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t		ret;
 	I2C_CHECK_ADDR();
 
@@ -389,46 +452,22 @@ uint8_t CFA10060::cmdChangeI2CAddress(uint8_t newAddress)
 
 uint8_t CFA10060::cmdCheckAndClearFileSystemErrors(void)
 {
-	//Check & Clear FileSystem Errors
+	/*
+	cmdCheckAndClearFileSystemErrors prints any pending CFA10060 error
+	messages to the serial console (if enabled), then clears the error
+	buffer.
+	The returned value is true (1) if successful.
+	*/
 	return checkAndClearFileSystemErrors();
-}
-
-uint8_t CFA10060::cmdSetBacklightBrightness(uint8_t brightness)
-{
-	//Set LCD backlight brightness (0-100%)
-	if (brightness > 100) return 0;
-	REQSHORT1(CMD_GET_SET_BACKLIGHT_BRIGHTNESS, brightness, 1);
-	//ok
-    return 1;
-}
-
-uint8_t CFA10060::cmdGetBacklightBrightness(uint8_t &retBrighness)
-{
-	//Get LCD backlight brightness
-	REQSHORT0(CMD_GET_SET_BACKLIGHT_BRIGHTNESS, 1);
-	//ok
-	retBrighness = response.data[0];
-    return 1;
-}
-
-uint8_t CFA10060::cmdFillSolidColor(uint8_t R, uint8_t G, uint8_t B)
-{
-	//Fill the LCD with a solid color
-	I2C_CHECK_ADDR();
-	command.command = CMD_FILL_SCREEN_WITH_SOLID_COLOR;
-    command.length = 3;
-    command.data[0]= R;
-    command.data[1]= G;
-    command.data[2]= B;
-    //send the packet, get the reply
-    SENDANDCHECKREPLY(0);
-	//ok
-    return 1;
 }
 
 uint8_t CFA10060::cmdGetSDVolumeLabel(char retLabel[])
 {
-	//Read the uSD card's volume label
+	/*
+	cmdGetSDVolumeLabel reads the inserted microSD cards volume label
+	and returns it in retLabel.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_GET_SD_CARD_VOLUME_LABEL;
     command.length = 0;
@@ -443,8 +482,13 @@ uint8_t CFA10060::cmdGetSDVolumeLabel(char retLabel[])
 
 uint8_t CFA10060::cmdGetFreeUsedSectors(uint32_t &retUsed, uint32_t &retFree)
 {
-	//Read the uSD card's volume label
-	//This can take quite some time to return (1-10 seconds)
+	/*
+	cmdGetFreeUsedSectors returns the number of used, and the number of
+	free sectors on the inserted microSD card. A sector is normally
+	512 byts in size.
+	The returned value is true (1) if successful.
+	This command may take sometime to return (1-10 seconds).
+	*/
 	REQSHORT0(CMD_GET_SD_CARD_FREE_USED_SECTORS, 8);
 	if (response.length == 8)
 	{
@@ -467,7 +511,11 @@ uint8_t CFA10060::cmdGetFreeUsedSectors(uint32_t &retUsed, uint32_t &retFree)
 
 uint8_t CFA10060::cmdGetNumFilesRootDir(uint16_t &retFileCount)
 {
-	//Read the uSD card's volume label
+	/*
+	cmdGetNumFilesRootDir returns in retFileCount the number of files
+	in the microSD card's root directory.
+	The returned value is true (1) if successful.
+	*/
 	REQSHORT0(CMD_GET_NUMBER_OF_FILES_IN_ROOT_DIR, 0xFF);
 	if (response.length == 2)
 	{
@@ -481,7 +529,11 @@ uint8_t CFA10060::cmdGetNumFilesRootDir(uint16_t &retFileCount)
 
 uint8_t CFA10060::cmdGetFileDetails(uint16_t fileIndex, uint16_t &retIndex, uint32_t &retSize, char *retName)
 {
-	//Get specified file's size and name
+	/*
+	cmdGetFileDetails returns size and name information of the
+	specified file at fileIndex on the microSD card.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t i;
 	REQSHORT2(CMD_GET_NAME_AND_SIZE_OF_FILE, (fileIndex & 0xFF), ((fileIndex >> 8) & 0xFF), 0xFF);
 	if (response.length > 6)
@@ -498,19 +550,21 @@ uint8_t CFA10060::cmdGetFileDetails(uint16_t fileIndex, uint16_t &retIndex, uint
 	return 0;
 }
 
-uint8_t CFA10060::cmdFileOpen(char fileName[], uint8_t mode, uint8_t retHandle)
+uint8_t CFA10060::cmdFileOpen(char fileName[], FileOpen_t mode, uint8_t &retHandle)
 {
-	//Open a file on the SD card using specified mode
-	//  FOPEN_READ, FOPEN_CREATE_RESET_READ_WRITE, FOPEN_CREATE_PRESERVE_READ_WRITE
-	//Returns the file handle
+	/*
+	cmdFileOpen opens the specified fileName on the mciroSD card
+	in mode (see FileOpen_t for file modes), and returns the
+	file handle in retHandle.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_FILE_OPEN;
-    command.data[0] = mode;
+    command.data[0] = (uint8_t)mode;
     command.length = strlen(fileName)+1;
     memcpy(&command.data[1], fileName, command.length);
     //send the packet, get the reply
     SENDANDCHECKREPLY(1);
-	SPRINTF(F(" len:%d "), response.length);
 	if (response.length == 1)
 	{
 		//got file handle reply, ok
@@ -523,8 +577,13 @@ uint8_t CFA10060::cmdFileOpen(char fileName[], uint8_t mode, uint8_t retHandle)
 
 uint8_t CFA10060::cmdFileRead(uint8_t fileHandle, uint8_t length, char retData[], uint8_t &retLength)
 {
-	//Read a file on the SD card that has been opened
-	//Returns the data & read data length
+	/*
+	cmdFileRead reads length data bytes from the file previously opened
+	by cmdFileOpen() into retData. retLength returns the amount of data
+	actually read. If the returned retLengthis not equal to the requested
+	length, then the end of the file has been reached, or an error has occoured.
+	The returned value is true (1) if successful.
+	*/
 	REQSHORT2(CMD_FILE_READ, fileHandle, length, 0xFF);
 	if (response.length > 1)
 	{
@@ -545,8 +604,11 @@ uint8_t CFA10060::cmdFileRead(uint8_t fileHandle, uint8_t length, char retData[]
 
 uint8_t CFA10060::cmdFileWrite(uint8_t fileHandle, char data[], uint8_t length, uint8_t &retDataWritten)
 {
-	//Write data to a file on the SD card that has been opened
-	//Returns the written data length
+	/*
+	cmdFileWrite writes length data bytes from data to the specified file.
+	retDataWritten returns the amount of data actually written to the file.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_FILE_WRITE;
 	command.length = length + 1;
@@ -570,8 +632,11 @@ uint8_t CFA10060::cmdFileWrite(uint8_t fileHandle, char data[], uint8_t length, 
 
 uint8_t CFA10060::cmdFileTell(uint8_t fileHandle, uint32_t &retPosition)
 {
-	//Read a file on the SD card that has been opened
-	//Returns the data & read data length
+	/*
+	cmdFileTell returns in retPosition the current file pointer location for
+	the file specifed by fileHandle.
+	The returned value is true (1) if successful.
+	*/
 	REQSHORT1(CMD_FILE_TELL, fileHandle, 0xFF);
 	if (response.length == 5)
 	{
@@ -589,9 +654,11 @@ uint8_t CFA10060::cmdFileTell(uint8_t fileHandle, uint32_t &retPosition)
 
 uint8_t CFA10060::cmdFileSeek(uint8_t fileHandle, uint32_t position)
 {
-	//Open a file on the SD card using specified mode
-	//  FOPEN_READ, FOPEN_CREATE_RESET_READ_WRITE, FOPEN_CREATE_PRESERVE_READ_WRITE
-	//Returns the file handle
+	/*
+	cmdFileSeek changes the current file pointer location for fileHandle to
+	the specified absolute position.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_FILE_SEEK;
 	command.length = 5;
@@ -613,8 +680,10 @@ uint8_t CFA10060::cmdFileSeek(uint8_t fileHandle, uint32_t position)
 
 uint8_t CFA10060::cmdFileClose(uint8_t fileHandle)
 {
-	//Read a file on the SD card that has been opened
-	//Returns the data & read data length
+	/*
+	cmdFileClose closes the opened file specified by fileHandle.
+	The returned value is true (1) if successful.
+	*/
 	REQSHORT1(CMD_FILE_CLOSE, fileHandle, 0xFF);
 	//ok
     return 1;
@@ -622,7 +691,10 @@ uint8_t CFA10060::cmdFileClose(uint8_t fileHandle)
 
 uint8_t CFA10060::cmdFileDelete(char fileName[])
 {
-	//Delete the specified file on the SD card
+	/*
+	cmdFileDelete removes the specified file from the filesystem.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t len;
 	len = strlen(fileName)+1;
 	REQSHORT(CMD_FILE_DELETE, fileName, len, 0xFF);
@@ -630,12 +702,71 @@ uint8_t CFA10060::cmdFileDelete(char fileName[])
 	return 1;
 }
 
+uint8_t CFA10060::cmdSetBacklightBrightness(uint8_t brightness)
+{
+	/*
+	cmdSetBacklightBrightness sets the LCD backlight level to percent
+	brightness (0-100 values valid).
+	The returned value is true (1) if successful.
+	*/
+	if (brightness > 100) return 0;
+	REQSHORT1(CMD_GET_SET_BACKLIGHT_BRIGHTNESS, brightness, 1);
+	//ok
+	return 1;
+}
+
+uint8_t CFA10060::cmdGetBacklightBrightness(uint8_t &retBrighness)
+{
+	/*
+	cmdGetBacklightBrightness returns the current backlight brightness in
+	percent.
+	The returned value is true (1) if successful.
+	*/
+	REQSHORT0(CMD_GET_SET_BACKLIGHT_BRIGHTNESS, 1);
+	//ok
+	retBrighness = response.data[0];
+	return 1;
+}
+
+uint8_t CFA10060::cmdFillSolidColor(uint8_t R, uint8_t G, uint8_t B)
+{
+	/*
+	cmdFillSolidColor fills the LCD with the specified R,G,B color.
+	Valid R,G,B values are 0-255.
+	The returned value is true (1) if successful.
+	*/
+	I2C_CHECK_ADDR();
+	command.command = CMD_FILL_SCREEN_WITH_SOLID_COLOR;
+	command.length = 3;
+	command.data[0] = R;
+	command.data[1] = G;
+	command.data[2] = B;
+	//send the packet, get the reply
+	SENDANDCHECKREPLY(0);
+	//ok
+	return 1;
+}
+
+uint8_t CFA10060::cmdFillSolidColor(Color_t color)
+{
+	/*
+	cmdFillSolidColor fills the LCD with the specified R,G,B color.
+	Valid R,G,B values are 0-255.
+	The returned value is true (1) if successful.
+	*/
+	return cmdFillSolidColor(color.R, color.G, color.B);
+}
+
 uint8_t CFA10060::cmdSetColor(
 	uint8_t fgR, uint8_t fgG, uint8_t fgB,
 	uint8_t bgR, uint8_t bgG, uint8_t bgB
 	)
 {
-	//Set foreground & background colors
+	/*
+	cmdSetColor sets the foreground and background colors to be used in
+	following LCD commands.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SET_COLOR;
 	command.length = 6;
@@ -651,9 +782,23 @@ uint8_t CFA10060::cmdSetColor(
 	return 1;
 }
 
+uint8_t CFA10060::cmdSetColor(Color_t fgColor, Color_t bgColor)
+{
+	/*
+	cmdSetColor sets the foreground and background colors to be used in
+	following LCD commands.
+	The returned value is true (1) if successful.
+	*/
+	return cmdSetColor(fgColor.R, fgColor.G, fgColor.B, bgColor.R, bgColor.G, bgColor.B);
+}
+
 uint8_t CFA10060::cmdSetColor(uint8_t fgR, uint8_t fgG, uint8_t fgB)
 {
-	//Set foreground color only
+	/*
+	cmdSetColor sets the foreground color to be used in
+	following LCD commands.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SET_COLOR;
 	command.length = 3;
@@ -668,7 +813,11 @@ uint8_t CFA10060::cmdSetColor(uint8_t fgR, uint8_t fgG, uint8_t fgB)
 
 uint8_t CFA10060::cmdDrawLine(uint8_t startX, uint8_t startY, uint8_t endX, uint8_t endY)
 {
-	//Draw a line on the LCD using previously set pixel color
+	/*
+	cmdDrawLine draws a line on the LCD from the start x,y pixel location to
+	the end x,y pixel location in the color set by the cmdSetColor() function.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_LINE;
 	command.length = 4;
@@ -684,7 +833,11 @@ uint8_t CFA10060::cmdDrawLine(uint8_t startX, uint8_t startY, uint8_t endX, uint
 
 uint8_t CFA10060::cmdDrawPixel(uint8_t x, uint8_t y)
 {
-	//Draw a pixel on the LCD using the specified color
+	/*
+	cmdDrawPixel draws a pixel on the LCD at the specified x,y pixel location in
+	the color set by the cmdSetColor() function.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_PIXEL;
 	command.length = 2;
@@ -698,7 +851,11 @@ uint8_t CFA10060::cmdDrawPixel(uint8_t x, uint8_t y)
 
 uint8_t CFA10060::cmdDrawPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
 {
-	//Draw a pixel on the LCD using the specified color
+	/*
+	cmdDrawPixel draws a pixel on the LCD at the specified x,y pixel location in
+	the R,G,B color specified.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_PIXEL;
 	command.length = 5;
@@ -713,17 +870,17 @@ uint8_t CFA10060::cmdDrawPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8
 	return 1;
 }
 
-uint8_t CFA10060::cmdDrawRectangle(uint8_t startX, uint8_t startY, uint8_t endX, uint8_t endY, uint8_t fillOption)
+uint8_t CFA10060::cmdDrawRectangle(uint8_t startX, uint8_t startY, uint8_t endX, uint8_t endY, Draw_t drawOption)
 {
-	//Draw a rectangle on the LCD using the specified color
-	//fillOption:
-	// 0: outline of rectangle, in foreground
-	// 1: filled rectangle, in background
-	// 2: filled rectangle in background outlined by foreground
+	/*
+	cmdDrawRectangle draws a rectangle on the LCD at the specified start and end
+	x,y pixel locations. See Draw_t for information on draw modes.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_RECTANGLE;
 	command.length = 5;
-	command.data[0] = fillOption;
+	command.data[0] = (uint8_t)drawOption;
 	command.data[1] = startX;
 	command.data[2] = startY;
 	command.data[3] = endX;
@@ -734,17 +891,18 @@ uint8_t CFA10060::cmdDrawRectangle(uint8_t startX, uint8_t startY, uint8_t endX,
 	return 1;
 }
 
-uint8_t CFA10060::cmdDrawRoundedRectangle(uint8_t startX, uint8_t startY, uint8_t endX, uint8_t endY, uint8_t radius, uint8_t fillOption)
+uint8_t CFA10060::cmdDrawRoundedRectangle(uint8_t startX, uint8_t startY, uint8_t endX, uint8_t endY, uint8_t radius, Draw_t drawOption)
 {
-	//Draw a rounded rectangle on the LCD using the specified color
-	//fillOption:
-	// 0: outline of rectangle, in foreground
-	// 1: filled rectangle, in background
-	// 2: filled rectangle in background outlined by foreground
+	/*
+	cmdDrawRoundedRectangle draws a rounded rectangle on the LCD at the specified
+	start and end x,y pixel locations with the specified corner radius.
+	See Draw_t for information on draw modes.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_ROUNDED_RECTANGLE;
 	command.length = 6;
-	command.data[0] = fillOption;
+	command.data[0] = (uint8_t)drawOption;
 	command.data[1] = startX;
 	command.data[2] = startY;
 	command.data[3] = endX;
@@ -756,17 +914,17 @@ uint8_t CFA10060::cmdDrawRoundedRectangle(uint8_t startX, uint8_t startY, uint8_
 	return 1;
 }
 
-uint8_t CFA10060::cmdDrawCircle(uint8_t centerX, uint8_t centerY, uint8_t radius, uint8_t fillOption)
+uint8_t CFA10060::cmdDrawCircle(uint8_t centerX, uint8_t centerY, uint8_t radius, Draw_t drawOption)
 {
-	//Draw a circle on the LCD using the specified color
-	//fillOption:
-	// 0: outline of rectangle, in foreground
-	// 1: filled rectangle, in background
-	// 2: filled rectangle in background outlined by foreground
+	/*
+	cmdDrawCircle draws a circle on the LCD at the specified center x,y pixel
+	location with the specified radius.	See Draw_t for information on draw modes.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_CIRCLE;
 	command.length = 4;
-	command.data[0] = fillOption;
+	command.data[0] = (uint8_t)drawOption;
 	command.data[1] = centerX;
 	command.data[2] = centerY;
 	command.data[3] = radius;
@@ -778,7 +936,11 @@ uint8_t CFA10060::cmdDrawCircle(uint8_t centerX, uint8_t centerY, uint8_t radius
 
 uint8_t CFA10060::cmdLCDBitBlt(uint8_t sourceX, uint8_t sourceY, uint8_t destX, uint8_t destY, uint8_t sizeX, uint8_t sizeY)
 {
-	//Copy image from one area of the LCD to another area
+	/*
+	cmdLCDBitBlt copies the currently displayed LCD image source area to the
+	specified destination area.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_BITBLT;
 	command.length = 6;
@@ -794,16 +956,18 @@ uint8_t CFA10060::cmdLCDBitBlt(uint8_t sourceX, uint8_t sourceY, uint8_t destX, 
 	return 1;
 }
 
-uint8_t CFA10060::cmdDrawText(uint8_t sizeOption, uint8_t drawBackground, uint8_t x, uint8_t y, char text[])
+uint8_t CFA10060::cmdDrawText(uint8_t x, uint8_t y, char text[], Font_t sizeOption, FontBackground_t backgroundOption)
 {
-	//Draw text to the LCD
-	// sizeOption:		0=8x8 font, 1=12x16 font
-	// drawBackground:	0=transparent, 1=solid
+	/*
+	cmdDrawText displays the specified text on the LCD at the specified x,y location.
+	See Font_t and FontBackground_t for information on those options.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t len;
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_TEXT;
-	command.data[0] = sizeOption;
-	command.data[1] = drawBackground;
+	command.data[0] = (uint8_t)sizeOption;
+	command.data[1] = (uint8_t)backgroundOption;
 	command.data[2] = x;
 	command.data[3] = y;
 	len = strlen(text);
@@ -817,7 +981,12 @@ uint8_t CFA10060::cmdDrawText(uint8_t sizeOption, uint8_t drawBackground, uint8_
 
 uint8_t CFA10060::cmdLCDCursor(Cursors_t cursorType, uint8_t &retCursorX, uint8_t &retCursorY, Pads_t &retEnterCancel)
 {
-	//Sets the LCD Cursor display option and returns cursor location and pad status
+	/*
+	cmdLCDCursor displays the touchpad curor in the specified style (or hides it),
+	and also returns the current x,y pixel location of the touchpad cursor &
+	the	status of the enter/cancel pads.
+	The returned value is true (1) if successful.
+	*/
 	lastCursorType = cursorType;
 	REQSHORT1(CMD_LCD_CURSOR, (uint8_t)cursorType, 3);
 	if (response.length == 3)
@@ -835,7 +1004,10 @@ uint8_t CFA10060::cmdLCDCursor(Cursors_t cursorType, uint8_t &retCursorX, uint8_
 
 uint8_t CFA10060::cmdLCDCursor(Cursors_t cursorType)
 {
-	//Sets the LCD Cursor display option
+	/*
+	cmdLCDCursor displays the touchpad curor in the specified style (or hides it).
+	The returned value is true (1) if successful.
+	*/
 	lastCursorType = cursorType;
 	REQSHORT1(CMD_LCD_CURSOR, (uint8_t)cursorType, 3);
 	if (response.length == 3)
@@ -847,7 +1019,10 @@ uint8_t CFA10060::cmdLCDCursor(Cursors_t cursorType)
 
 uint8_t CFA10060::cmdLCDCursor(uint8_t cursorIndex)
 {
-	//Sets the LCD Cursor display option
+	/*
+	cmdLCDCursor displays the touchpad curor in the specified style (or hides it).
+	The returned value is true (1) if successful.
+	*/
 	lastCursorType = (Cursors_t)cursorIndex;
 	REQSHORT1(CMD_LCD_CURSOR, cursorIndex, 3);
 	if (response.length == 3)
@@ -859,7 +1034,11 @@ uint8_t CFA10060::cmdLCDCursor(uint8_t cursorIndex)
 
 uint8_t CFA10060::cmdLCDCursor(uint8_t &retCursorX, uint8_t &retCursorY, Pads_t &retEnterCancel)
 {
-	//Gets the LCD Cursor location & pad status
+	/*
+	cmdLCDCursor returns the current x,y pixel location of the touchpad cursor, and
+	the	status of the enter/cancel pads.
+	The returned value is true (1) if successful.
+	*/
 	REQSHORT1(CMD_LCD_CURSOR, (uint8_t)lastCursorType, 3);
 	if (response.length == 3)
 	{
@@ -876,6 +1055,11 @@ uint8_t CFA10060::cmdLCDCursor(uint8_t &retCursorX, uint8_t &retCursorY, Pads_t 
 
 uint8_t CFA10060::cmdDrawSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint8_t sizeX, uint8_t sizeY)
 {
+	/*
+	cmdDrawSprite draws a previously saved sprite to the specified x,y pixel location.
+	Pixel values of R=4,G=4,B=4 are transparent.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SPRITE;
 	command.length = 6;
@@ -893,6 +1077,12 @@ uint8_t CFA10060::cmdDrawSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint8
 
 uint8_t CFA10060::cmdKeepSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint8_t sizeX, uint8_t sizeY)
 {
+	/*
+	cmdKeepSprite saves the image displayed at the specified x,y position of
+	sizeX,sizeY (1x1 to 32x32 pixel size valid) into sprite
+	position spriteIndex (0-3 valid).
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SPRITE;
 	command.length = 6;
@@ -910,6 +1100,11 @@ uint8_t CFA10060::cmdKeepSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint8
 
 uint8_t CFA10060::cmdStartSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint8_t sizeX, uint8_t sizeY)
 {
+	/*
+	cmdStartSprite saves the image under the specified x,y pixel location to
+	spriteIndex+1, then draws sprite at spriteIndex to the same x,y location.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SPRITE;
 	command.length = 6;
@@ -927,6 +1122,11 @@ uint8_t CFA10060::cmdStartSprite(uint8_t spriteIndex, uint8_t x, uint8_t y, uint
 
 uint8_t CFA10060::cmdMoveSprite(uint8_t spriteIndex, uint8_t oldX, uint8_t oldY, uint8_t newX, uint8_t newY, uint8_t sizeX, uint8_t sizeY)
 {
+	/*
+	cmdMoveSprite moves a previously started/moved sprite from oldX,oldY pixel
+	location to newX,newY.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_LCD_SPRITE;
 	command.length = 8;
@@ -946,7 +1146,13 @@ uint8_t CFA10060::cmdMoveSprite(uint8_t spriteIndex, uint8_t oldX, uint8_t oldY,
 
 uint8_t CFA10060::cmdDrawSDBMPOnLCD(char fileName[])
 {
-	//Display a BMP located on the SD card to the LCD
+	/*
+	cmdDrawSDBMPOnLCD draws the specified BMP format image contained on
+	the microSD card to the LCD.
+	The BMP file must be Windows format, 128x128 pixels in size, and
+	24bit color.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t len, i;
 	len = strlen(fileName)+1;
 	REQSHORT(CMD_PUSH_BMP_FROM_SD_CARD_TO_LCD, fileName, len, 0xFF);
@@ -955,13 +1161,18 @@ uint8_t CFA10060::cmdDrawSDBMPOnLCD(char fileName[])
 
 uint8_t CFA10060::cmdPlaySDMovieOnLCD(char fileName[])
 {
-	//Display a movie located on the SD card on the LCD
+	/*
+	cmdPlaySDMovieOnLCD plays the specified video file located on the microSD card
+	to the LCD. See CFA10060 documention for video file format.
+	The video file will be played until end of file is reached.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t len, i;
 	len = strlen(fileName)+1;
 	REQSHORT(CMD_PUSH_MOVIE_FROM_SD_CARD_TO_LCD, fileName, len, 0);
 	//hold here until movie is finished
 #ifdef CFA10060_USE_I2C
-	while (I2CIsBusy())
+	while (isBusy())
 		delay(50);
 #endif
 	return 1;
@@ -969,7 +1180,12 @@ uint8_t CFA10060::cmdPlaySDMovieOnLCD(char fileName[])
 
 uint8_t CFA10060::cmdSaveLCDToSDBMP(char fileName[])
 {
-	//Save current LCD display image to BMP on SD card
+	/*
+	cmdSaveLCDToSDBMP saves the current LCD image to the specified BMP file
+	on the microSD card. The created BMP file will be in Windows format,
+	128x128 pixels in size, and	24bit color.
+	The returned value is true (1) if successful.
+	*/
 	uint8_t len;
 	len = strlen(fileName)+1;
 	REQSHORT(CMD_SAVE_LCD_AS_BMP, fileName, len, 0xFF);
@@ -979,8 +1195,12 @@ uint8_t CFA10060::cmdSaveLCDToSDBMP(char fileName[])
 
 uint8_t CFA10060::cmdDrawSDMoveFrameToLCD(uint8_t fileHandle, uint32_t frameNumber)
 {
-	//Display a single frame of a movie file on the SD card to the LCD
-	//Movie file must have been opened by cmdFileOpen() first
+	/*
+	cmdDrawSDMoveFrameToLCD draws the single specified frame number of the video file
+	to the LCD. See CFA10060 documention for video file format.
+	Movie file must have been opened by cmdFileOpen() first.
+	The returned value is true (1) if successful.
+	*/
 	I2C_CHECK_ADDR();
 	command.command = CMD_PUSH_MOVIE_FRAME_FROM_SD_CARD_TO_LCD;
 	command.length = 5;
@@ -999,7 +1219,7 @@ uint8_t CFA10060::cmdDrawSDMoveFrameToLCD(uint8_t fileHandle, uint32_t frameNumb
 
 #ifdef CFA10060_USE_I2C
 
-inline uint8_t CFA10060::I2CIsBusy(void)
+inline uint8_t CFA10060::isBusy(void)
 {
 	//Send a degenerate I2C transaction to the display. It is just the start bit and addreess field, no data bytes.
 	Wire.beginTransmission(I2CAddress);
@@ -1044,7 +1264,7 @@ uint8_t CFA10060::I2CSendCommandGetResponse(
 	//prepare the response. Let the user know if it is taking a long time.
 	//There are some operations (CMD_GET_SD_CARD_FREE_USED_SECTORS comes to mind)
 	//that can take a long time to execute, especially for large uSD cards.
-	while (I2CIsBusy())
+	while (isBusy())
 	{
 		delay(5);
 		delayCount++;
@@ -1143,7 +1363,7 @@ uint8_t CFA10060::I2CSearchForAddress(void)
 	//Assuming the CFA10060 is not busy, is should only be ready at one address.
 	for (I2CAddress = 0; I2CAddress <= 127; I2CAddress++)
 	{
-		if (I2CIsBusy())
+		if (isBusy())
 		{
 			//No ACK at this address.
 			//SPRINTF(F("NAK at %3d (0x%02X)\n"),I2CAddress,I2CAddress);
@@ -1196,7 +1416,7 @@ uint8_t CFA10060::I2CSearchForAddress(void)
 
 #ifdef CFA10060_USE_SPI
 
-inline uint8_t CFA10060::SPIIsBusy(void)
+inline uint8_t CFA10060::isBusy(void)
 {
 	//make sure that the SS pin is deselected (high)
 	if (!digitalRead(CFA10060_SPI_SS_PIN))
@@ -1237,23 +1457,18 @@ uint8_t CFA10060::SPISendCommandGetResponse(
 	uint32_t	delayCount;
 	uint8_t		returnValue = 1;
 
-	//make sure that the SS pin is deselected to begin with
-	if (digitalRead(CFA10060_SPI_SS_PIN) == 0)
-		//pin is low (selected), error!
-		SPRINTF(F("SPI SS is busy?? Continuing anyway...\n"));
-
 	//bring the SS pin low (select the CFA10060 SPI)
 	pinMode(CFA10060_SPI_SS_PIN,OUTPUT);
 	digitalWrite(CFA10060_SPI_SS_PIN,LOW);
-	delayMicroseconds(1); //small delay
+	//we need this delay here otherwise the CFA10060 sometimes misses the first byte of data
+	delayMicroseconds(20);
 
-	//send the command and receive last response which is ignored
+	//send the command and receive last response (ignored)
 	SPI.transfer(command->command);
 	lastRet = SPI.transfer(command->length);
 	for (i = 0; i < command->length; i++)
 		lastRet = SPI.transfer(command->data[i]);
 	if (lastRet != 0xFF)
-	{
 		//read until we get 0xFF to flush out CFA10060 send buffer
 		for (i = 0; i < 128; i++)
 		{
@@ -1261,13 +1476,13 @@ uint8_t CFA10060::SPISendCommandGetResponse(
 				break;
 			delayMicroseconds(1);
 		}
-		//SPRINTF(F("GOT DATA BACK? 0x%02X CLEARED: %d bytes\n"), lastRet, i);
-	}
 
 	//end the transmission (bring SS high)
 	pinMode(5, INPUT_PULLUP);
-	delayMicroseconds(25);
+	
+	//zero the reply data buffer, and wait a little
 	memset(response->data, 0x00, MAXIMUM_DATA_LENGTH);
+	delayMicroseconds(15);
 
 	//wait for a reply
 	delayCount = 0;
@@ -1276,77 +1491,64 @@ uint8_t CFA10060::SPISendCommandGetResponse(
 		//bring the SS pin low (select the CFA10060 SPI)
 		pinMode(CFA10060_SPI_SS_PIN,OUTPUT);
 		digitalWrite(CFA10060_SPI_SS_PIN,LOW);
-		delayMicroseconds(1); //small delay
+		//we need this delay here otherwise the CFA10060 sometimes misses the first byte of data
+		delayMicroseconds(15);
 		//read the command
 		response->command = SPI.transfer(0xFF);
+		//check the response
 		if (response->command != 0xFF)
 			//appear to have read valid data, break loop and continue
 			break;
 		//end the transmission (bring SS high)
-		pinMode(5, INPUT_PULLUP);
+		pinMode(5, INPUT_PULLUP);			
 
 		//delay & messages
-		delay(5);
+		delayMicroseconds(10);
 		delayCount++;
-#ifdef CFA10006_SERIAL_MESSAGES
-		if (delayCount == 50)
-			SPRINTF(F("Waiting..."));
-		if (delayCount % 100 == 0)
-			SPRINTF(F("."));
-		if (delayCount > 3000)
-			//too long? failed.
-			break;
-#endif
+		//each loop takes 90uS (measured)
+		#define DL250MS (250000 / 90) /* = 250mS / 90uS */
+		if ((delayCount % DL250MS) == 0) //250mS
+		{
+#ifdef CFA10006_SERIAL_MESSAGES			
+			if (delayCount == DL250MS) 
+				SPRINTF(F("Waiting...")); //first wait message
+			else
+				SPRINTF(F(".")); //waiting dot
+#endif		
+			if (delayCount > DL250MS*4*8) //8 seconds
+				//too long? failed.
+				break;
+		}
 	}
+	
+	
 	if (response->command == 0xFF)
 	{
 		//never got any data, return an error
+#ifdef CFA10006_SERIAL_MESSAGES		
 		SPRINTF(F(" giving up.\n"));
-		//SPRINTF(F("Did not receive a command response from the CFA10060.\n"));
+#endif
 		//end the transmission (bring SS high)
 		pinMode(5, INPUT_PULLUP);
-		delayMicroseconds(1);
 		return 0;
 	}
-	if (delayCount > 50)
+	//we got a reply
+#ifdef CFA10006_SERIAL_MESSAGES			
+	if (delayCount > 250000)
 		SPRINTF(F(" done.\n"));
-
-	/*
-	for (delayCount = 0; delayCount < 5000000/50; delayCount++)
-	{
-		//bring the SS pin low (select the CFA10060 SPI)
-		pinMode(CFA10060_SPI_SS_PIN,OUTPUT);
-		digitalWrite(CFA10060_SPI_SS_PIN,LOW);
-		delayMicroseconds(1); //small delay
-		//read the command
-		response->command = SPI.transfer(0xFF);
-		if (response->command != 0xFF)
-			//appear to have read valid data, break loop and continue
-			break;
-		//end the transmission (bring SS high)
-		pinMode(5, INPUT_PULLUP);
-		//no data to be read, delay and try again
-		delayMicroseconds(50); //50uS = ~200uS full loop
-	}
-	if (response->command == 0xFF)
-	{
-		//never got any data, return an error
-		SPRINTF(F("Never received a command response from the CFA10060.\n"));
-		//end the transmission (bring SS high)
-		pinMode(5, INPUT_PULLUP);
-		delayMicroseconds(1);
-		return 0;
-	} */
+#endif
 
 	//read the length
 	response->length = SPI.transfer(0xFF);
 
 	//response should match the sent command
+#ifdef CFA10006_SERIAL_MESSAGES		
 	if ((response->command & 0x3F) != (command->command & 0x3F))
 		//Warn and continue.
 		SPRINTF(F("Received unexpected response of 0x%02X to command 0x%02X.\n"),
 				response->command, response->command,
 				command->command & 0x3F,  command->command & 0x3F);
+#endif				
 
 	//read up the data (we cant just stop reading at
 	// receiveDataLength as the CFA10060 will buffer the data and send if next time creating sync issues)
@@ -1355,10 +1557,6 @@ uint8_t CFA10060::SPISendCommandGetResponse(
 
 	//end the transmission (bring SS high)
 	pinMode(5, INPUT_PULLUP);
-	delayMicroseconds(1);
-
-	//debug: write delay from earlier
-	//SPRINTF(F(" delayCount:%u "),delayCount);
 
 	//If the 7th bit (0x80) is set, the CFA10060 has rejected our packet as invalid.
 #ifdef CFA10006_SERIAL_MESSAGES
@@ -1370,13 +1568,17 @@ uint8_t CFA10060::SPISendCommandGetResponse(
 #endif
 
 	//If the 6th bit (0x40) is set, the CFA10060 has logged errors and we should ask what went wrong.
-	haveError = 0;
 	if ((response->command & CMD_ERR_RESPONSE_FLAG) != 0)
 	{
 		//Warn and continue.
+#ifdef CFA10006_SERIAL_MESSAGES		
 		SPRINTF(F("Errors logged on CFA10060.\n"));
+#endif		
 		haveError = 1;
 	}
+	else
+		//all ok
+		haveError = 0;
 
 	return returnValue;
 }
@@ -1392,17 +1594,8 @@ uint8_t CFA10060::checkAndClearFileSystemErrors(void)
 	command.length = 0;
 	SENDANDGETRESPONSE(&command, &response, 20);
 
-	//We expect the response length to be 20
-#ifdef CFA10006_SERIAL_MESSAGES
-	if (response.length != 20)
-	{
-		SPRINTF(F("RespLength=%3d "),response.length);
-		SPRINTF(F("Resp=%3d = 0x%02X\n"),response.command,response.command);
-	}
-#endif
-
-	//If there are errors, print them, otherwise silence.
-	for(i = 0; i < response.length;)
+	//If there are errors, print them, otherwise silence
+	for(i = 0; i < response.length; i+=2)
 	{
 		if(response.data[i+1] != 0)
 		{
@@ -1428,7 +1621,6 @@ uint8_t CFA10060::checkAndClearFileSystemErrors(void)
 #endif //CFA10006_SERIAL_MESSAGES
 				returnValue = 0;
 		}
-		i += 2;
 	}
 
 	return returnValue;
